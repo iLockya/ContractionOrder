@@ -1,0 +1,5 @@
+ The treewidth of the graph in the file g.cnf is 9
+ Time required = 299.075
+ The treewidth is not optimal
+ The optimal ordering is 
+4 63 56 35 33 16 61 59 57 45 49 48 46 36 62 58 47 38 37 44 23 20 21 24 18 3 34 22 40 25 13 43 55 17 15 31 32 28 27 60 26 39 29 50 51 19 12 53 52 30 42 2 1 9 7 6 8 10 11 5 41 54 14 
