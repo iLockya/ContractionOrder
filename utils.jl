@@ -1,6 +1,40 @@
-function log2sumexp(a)
+@inline function log2sumexp(a)
     offset = maximum(a)
     return log2(sum(exp.(log(2.0).*(a .- offset) )) ) + offset
+end
+
+@inline function fast_log2sumexp2(a, b)
+    mm, ms = minmax(a, b)
+    return log2(exp2(mm - ms) + 1) + ms
+end
+
+@inline function fast_log2sumexp2(a, b, c)
+    if a > b
+        if a > c
+            m1, m2, ms = b, c, a
+        else
+            m1, m2, ms = a, b, c
+        end
+    else
+        if b > c
+            m1, m2, ms = c, a, b
+        else
+            m1, m2, ms = b, a, c
+        end
+    end
+    return Base.FastMath.log2(Base.FastMath.exp2(m1 - ms) + Base.FastMath.exp2(m2 - ms) + 1) + ms
+end
+
+@inline function fast_log2minusexp2(a, b, c)
+    """
+    return log2(exp2(a) - exp2(b) - exp2(c))
+    """
+    return Base.FastMath.log2(1 - Base.FastMath.exp2(b - a) - Base.FastMath.exp2(c - a)) + a
+end
+
+@inline function tree_imbalance(a,b,n;λ=0.0)
+    mm, ms = minmax(a,b)
+    return λ*mm / ((abs(ms-1.5))*n)
 end
 
 function modify_order!(order::Array)

@@ -22,7 +22,7 @@ end
 function compute_loss(mytn::OpenGraph,loss_type::String,a)
     i,j=a
     weights = [mytn.node_log2dim[i] for i in a]
-    loss = mytn.node_log2dim[i] + mytn.node_outlog2dim[i] +mytn.node_log2dim[j] + mytn.node_outlog2dim[j] - 2*mytn.log2dim[i,j]
+    loss = mytn.node_log2dim[i] + mytn.node_outlog2dim[i] +mytn.node_log2dim[j] + mytn.node_outlog2dim[j] - 2*get_edge_log2dim(mytn,sort(a))
     if loss_type == "mindim" # minimize dimension of the obtained tensor
         return round(Int64,loss)
     elseif loss_type == "mindiminc" # minimize the increase of the obtained tensor

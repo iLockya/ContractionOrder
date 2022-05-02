@@ -14,7 +14,7 @@ mutable struct CTree_Node{}
     father::Set{Any} # Set([1,2,3,4,5])
     left::Set{Any} # Set([1,2])
     right::Set{Any} # Set([3,5])
-    sc::Float64 # size of the node in single contration
+    sc::Float64 # size of the node. sc = get_node_dim(ct,id).
     tc::Float64 # time complexity in single contraction
     complex::Array{Float64,1} # complexity for subtree
 end
@@ -31,6 +31,7 @@ mutable struct Contraction_Tree{}
     edge_dict::Dict{Any,Float64} # map edge to log2dim
     root::Set{Any}
     complex::Array{Float64,1} # [space_complexity, time_complexity]
+    slice::Set{Vector{Int64}} # sliced edge
 end
 
 
@@ -43,7 +44,7 @@ function init_CTree(n::Int64,neis,edge_dict)
     """
     #root = Set(collect(1:n))
     root = Set(keys(neis))
-    ct = Contraction_Tree(Dict(),neis,edge_dict,root,[0.0,1.0])
+    ct = Contraction_Tree(Dict(),neis,edge_dict,root,[0.0,1.0],Set([]))
     for i in root
         ct.nodes[Set([i])] = CTree_Node(i,Set([i]),Set([]),Set([]),Set([]),0.0,-Inf,[0.0,-Inf])
     end
@@ -54,13 +55,20 @@ function update_complex!(ct::Contraction_Tree, root::CTree_Node)
     """
     update complexity for all CTree_Node recursively.
     """
-    is_leaf(root) && return
+    if is_leaf(root)
+        sc = get_node_dim(ct,root.id)
+        root.sc = sc
+        root.complex[1] = sc
+        return
+    end
     L_node = get_left(ct,root)
     R_node = get_right(ct,root) 
     update_complex!(ct,L_node)
     update_complex!(ct,R_node)
+    root.sc = get_node_dim(ct,root.id)
     root.complex[1] = maximum([root.sc,L_node.complex[1],R_node.complex[1]])
-    root.complex[2] = log2sumexp([root.tc,L_node.complex[2],R_node.complex[2]])
+    #root.complex[1] = maximum([node.sc for node in ct.nodes.values()])
+    root.complex[2] = fast_log2sumexp2(root.tc,L_node.complex[2],R_node.complex[2])
     if ct.root == root.id
         ct.complex = root.complex
     end
@@ -68,22 +76,22 @@ function update_complex!(ct::Contraction_Tree, root::CTree_Node)
     # ct.complex[2] = log2sumexp([node.tc for node in values(ct.nodes)])
 end
 
-function get_left(ct::Contraction_Tree, node::CTree_Node)::CTree_Node
+@inline function get_left(ct::Contraction_Tree, node::CTree_Node)::CTree_Node
     length(node.id) > 1 && return ct.nodes[node.left]
     error("Node ",node.id," has no left node." )
 end
 
-function get_father(ct::Contraction_Tree, node::CTree_Node)::CTree_Node
+@inline function get_father(ct::Contraction_Tree, node::CTree_Node)::CTree_Node
     node.id == ct.root || return ct.nodes[node.father]
     error("Node ",id," is the root node." ) 
 end
 
-function get_right(ct::Contraction_Tree, node::CTree_Node)::CTree_Node
+@inline function get_right(ct::Contraction_Tree, node::CTree_Node)::CTree_Node
     length(node.id) > 1 && return ct.nodes[node.right]
     error("Node ",id," has no right node." )
 end
 
-function get_color(ct::Contraction_Tree, id::Set{Any})
+@inline function get_color(ct::Contraction_Tree, id::Set{Any})
     length(id) ≤ 2 && return 'w'
     L_node, R_node = get_left(ct,ct.nodes[id]), get_right(ct,ct.nodes[id])
     is_parent(L_node) && is_leaf(R_node) && return 'y'
@@ -92,19 +100,21 @@ function get_color(ct::Contraction_Tree, id::Set{Any})
 end
 
 function get_height(ct::Contraction_Tree, node::CTree_Node)
+    """
+    count from leaves.
+    """
     is_leaf(node) && return 1
     return max(get_height(ct,get_left(ct,node))+1,get_height(ct,get_right(ct,node))+1)
 end
 
-function get_node_dim(ct,node)
+@inline function get_node_dim(ct,nodeid)
     """
     get node log2dim
     """
-    neis = get_neis(ct,node)
     dim = 0
-    for i in node.id
+    for i in nodeid
         for j in ct.neis[i]
-            if j in neis
+            if j ∉ nodeid && sort([i,j]) ∉ ct.slice
                 dim += ct.edge_dict[sort([i,j])]
             end
         end
@@ -112,7 +122,22 @@ function get_node_dim(ct,node)
     return dim
 end
 
-function get_depth(ct::Contraction_Tree,node::CTree_Node)
+@inline function get_neis(ct::Contraction_Tree,nodeid)
+    """
+    get neighbors of CTree node.
+    """
+    neis = Set([])
+    for i in nodeid
+        for j in ct.neis[i]
+            if j ∉ nodeid && sort([i,j]) ∉ ct.slice
+                push!(neis,j)
+            end
+        end
+    end
+    return neis
+end
+
+@inline function get_depth(ct::Contraction_Tree,node::CTree_Node)
     node.id == ct.root && return 1
     return get_depth(ct,get_father(ct,node))+1
 end
@@ -133,7 +158,7 @@ function LRD_traversal!(ct::Contraction_Tree,node::CTree_Node,LRD_list::Array)
 end
     
 
-function is_leaf(node::CTree_Node)
+@inline function is_leaf(node::CTree_Node)
     """
 
     True if node is leaf.
@@ -149,9 +174,8 @@ function is_grandparent(ct::Contraction_Tree,node::CTree_Node)
     return length(node.id) ≥ 3
 end
 
-function get_neis(ct::Contraction_Tree,node::CTree_Node)
-    return setdiff(union([ct.neis[i] for i in node.id]...),node.id)
-end
+
+
 
 function CTree_contract!(ct,pair,g_edge,sc,tc)
     """
@@ -171,7 +195,8 @@ function CTree_contract!(ct,pair,g_edge,sc,tc)
     father = Set([])
     left = pair[1]
     right = pair[2]
-    ct.nodes[id] = CTree_Node(gid,id,father,left,right,sc,tc,[sc,tc])
+    nodesc = get_node_dim(ct,id)
+    ct.nodes[id] = CTree_Node(gid,id,father,left,right,nodesc,tc,[sc,tc])
     ct.nodes[pair[1]].father = id
     ct.nodes[pair[2]].father = id
     return id
@@ -208,13 +233,17 @@ function contract_node(ct::Contraction_Tree,A_Node::CTree_Node,B_Node::CTree_Nod
     contract node A and node B to node D.
     return Node_D, sc, tc
     """
-    A_neis = get_neis(ct,A_Node)
-    B_neis = get_neis(ct,B_Node)
-    A_log2dim = [0]
-    B_log2dim = [0]
-    AB_log2dim = [0]
+    A_neis = get_neis(ct,A_Node.id)
+    B_neis = get_neis(ct,B_Node.id)
+    A_log2dim = Vector{Float64}([])
+    B_log2dim = Vector{Float64}([])
+    AB_log2dim = Vector{Float64}([])
     for (edge,log2dim) in ct.edge_dict
         i,j=edge
+        if edge ∈ ct.slice # ignore the sliced edges
+            continue
+        end
+        # determine witch class the edge belongs to.   
         if (i∈A_neis && j∈A_Node.id) || (i∈A_Node.id && j∈A_neis)
             push!(A_log2dim,log2dim)
         end
@@ -225,119 +254,136 @@ function contract_node(ct::Contraction_Tree,A_Node::CTree_Node,B_Node::CTree_Nod
             push!(AB_log2dim,log2dim)
         end
     end
+
     id = union(A_Node.id,B_Node.id)
     gid = min(id...)
     sc = max(sum(A_log2dim),sum(B_log2dim),sum(A_log2dim)+sum(B_log2dim)-2*sum(AB_log2dim))
-    tc = sum(A_log2dim) + sum(B_log2dim) - sum(AB_log2dim)
-    D = CTree_Node(gid,id,Set([]),A_Node.id,B_Node.id,sc,tc,[sc,tc])
+    tc = AB_log2dim==[] ? sum(A_log2dim) + sum(B_log2dim)-1 : sum(A_log2dim) + sum(B_log2dim) - sum(AB_log2dim)
+    D = CTree_Node(gid,id,Set([]),A_Node.id,B_Node.id,get_node_dim(ct,id),tc,[sc,tc])
+    return D
 end
 
+  
 
 function make_trial(ct::Contraction_Tree,P_Node::CTree_Node,color::Char)
     """
-    return possible state
+    This function only make one trial.
     color = 'y', return [type1, type2, nothing, nothing]
     color = 'b', return [nothing, nothing, type3, type4]
     """
-    @switch color begin
-        @case 'y'
+    n = length(ct.root) # total number of nodes
+    if color == 'y'
+        t = rand([1,2])
+    elseif color == 'b'
+        t = rand([3,4])
+    else 
+        t = rand([1,2,3,4])
+    end
+
+    if t ∈ [1,2]
         L_Node = get_left(ct,P_Node)
         A_Node = get_left(ct,L_Node)
         B_Node = get_right(ct, L_Node)
         C_Node = get_right(ct, P_Node)
-        H_ori = target_fn(max(P_Node.sc,L_Node.sc),log2sumexp([L_Node.tc,P_Node.tc]))
-        #H_ori = target_fn(max(P_Node.sc,L_Node.sc),2^L_Node.tc+2^P_Node.tc)
-
-        
-        L_tmp_1 = contract_node(ct, C_Node,B_Node)
-        P_tmp_1 = contract_node(ct, L_tmp_1,A_Node)
-        L_tmp_2 = contract_node(ct, A_Node,C_Node)
-        P_tmp_2 = contract_node(ct,L_tmp_2,B_Node)
-        
-        ΔH₁ = target_fn(max(P_tmp_1.sc,L_tmp_1.sc),log2sumexp([L_tmp_1.tc,P_tmp_1.tc])) - H_ori
-        ΔH₂ = target_fn(max(P_tmp_2.sc,L_tmp_2.sc),log2sumexp([L_tmp_2.tc,P_tmp_2.tc])) - H_ori
-        #ΔH₁ = target_fn(max(P_tmp_1.sc,L_tmp_1.sc,ct.complex[1]),2^L_tmp_1.tc+2^P_tmp_1.tc) - H_ori
-        #ΔH₂ = target_fn(max(P_tmp_2.sc,P_tmp_2.sc,ct.complex[1]),2^L_tmp_2.tc+2^P_tmp_2.tc) - H_ori
-        return [ΔH₁,ΔH₂,Inf,Inf],[L_tmp_1,L_tmp_2,nothing,nothing],[P_tmp_1,P_tmp_2,nothing,nothing]
-
-        @case 'b'
+        hA,hB,hC = get_height(ct,A_Node),get_height(ct,B_Node),get_height(ct,C_Node)
+        H_ori = target_fn(max(P_Node.sc,L_Node.sc),fast_log2sumexp2(L_Node.tc,P_Node.tc)) 
+                + tree_imbalance(max(hA,hB)+1,hC,n)
+    else
         R_Node = get_right(ct,P_Node)
         A_Node = get_left(ct,P_Node)
         B_Node = get_left(ct, R_Node)
         C_Node = get_right(ct, R_Node)
-        H_ori = target_fn(max(P_Node.sc,R_Node.sc),log2sumexp([R_Node.tc,P_Node.tc]))
-        #H_ori = target_fn(max(P_Node.sc,R_Node.sc),2^R_Node.tc+2^P_Node.tc)
-        
+        hA,hB,hC = get_height(ct,A_Node),get_height(ct,B_Node),get_height(ct,C_Node)
+        H_ori = target_fn(max(P_Node.sc,R_Node.sc),fast_log2sumexp2(R_Node.tc,P_Node.tc)) + tree_imbalance(hA,max(hB,hC)+1,n)
+    end
+
+
+    @switch t begin
+        @case 1 # (A*B)*C -> (C*B)*A
+        L_tmp_1 = contract_node(ct, C_Node,B_Node)
+        P_tmp_1 = contract_node(ct, L_tmp_1,A_Node)
+        ΔH₁ = target_fn(max(P_tmp_1.sc,L_tmp_1.sc),fast_log2sumexp2(L_tmp_1.tc,P_tmp_1.tc)) + tree_imbalance(hA,max(hB,hC)+1,n) - H_ori
+        return t,ΔH₁,L_tmp_1,P_tmp_1
+
+        @case 2 # (A*B)*C -> (A*C)*B
+        L_tmp_2 = contract_node(ct, A_Node,C_Node)
+        P_tmp_2 = contract_node(ct,L_tmp_2,B_Node)
+        ΔH₂ = target_fn(max(P_tmp_2.sc,L_tmp_2.sc),fast_log2sumexp2(L_tmp_2.tc,P_tmp_2.tc)) + tree_imbalance(hB,max(hA,hC)+1,n) - H_ori
+        return t,ΔH₂,L_tmp_2,P_tmp_2
+
+        @case 3 # A*(B*C) -> B*(A*C)
         R_tmp_3 = contract_node(ct,A_Node,C_Node)
         P_tmp_3 = contract_node(ct,B_Node,R_tmp_3)
+        ΔH₃ = target_fn(max(P_tmp_3.sc,R_tmp_3.sc),fast_log2sumexp2(R_tmp_3.tc,P_tmp_3.tc)) + tree_imbalance(hB,max(hA,hC)+1,n) - H_ori
+        return t,ΔH₃,R_tmp_3,P_tmp_3
+
+        @case 4 # A*(B*C) -> C*(B*A)
         R_tmp_4 = contract_node(ct,B_Node,A_Node)
         P_tmp_4 = contract_node(ct,C_Node,R_tmp_4)
-        ΔH₃ = target_fn(max(P_tmp_3.sc,R_tmp_3.sc),log2sumexp([R_tmp_3.tc,P_tmp_3.tc])) - H_ori
-        ΔH₄ = target_fn(max(P_tmp_4.sc,R_tmp_4.sc),log2sumexp([R_tmp_4.tc,P_tmp_4.tc])) - H_ori
-        #ΔH₃ = target_fn(max(P_tmp_3.sc,R_tmp_3.sc,ct.complex[1]),2^R_tmp_3.tc+2^P_tmp_3.tc) - H_ori
-        #ΔH₄ = target_fn(max(P_tmp_4.sc,R_tmp_4.sc,ct.complex[1]),2^R_tmp_4.tc+2^P_tmp_4.tc) - H_ori
-        return [Inf,Inf,ΔH₃,ΔH₄],[nothing,nothing,R_tmp_3,R_tmp_4],[nothing,nothing,P_tmp_3,P_tmp_4]
-        
-        @case 'g'
-        YH,YL,YP = make_trial(ct,P_Node,'y')
-        BH,BR,BP = make_trial(ct,P_Node,'b')
-        return [YH[1],YH[2],BH[3],BH[4]],[YL[1],YL[2],BR[3],BR[4]],[YP[1],YP[2],BP[3],BP[4]]
+        ΔH₄ = target_fn(max(P_tmp_4.sc,R_tmp_4.sc),fast_log2sumexp2(R_tmp_4.tc,P_tmp_4.tc)) + tree_imbalance(hC,max(hA,hB)+1,n) - H_ori
+        return t,ΔH₄,R_tmp_4,P_tmp_4
     end
-end    
+end
 
-function local_update!(ct::Contraction_Tree,P_Node::CTree_Node,beta::Float64)
+
+
+function local_update!(ct::Contraction_Tree,P_Node::CTree_Node,β::Float64)
     """
     """
     color = get_color(ct,P_Node.id)
     color == 'w' && return 0
     L = get_left(ct,P_Node)
     R = get_right(ct,P_Node)
-    ΔH,LR_tmp,P_tmp = make_trial(ct,P_Node,color)
-    # println(ΔH)
-    type = sample([0,1,2,3,4],Weights(exp.(-beta.*insert!(ΔH,1,0))))
-    @switch type begin
+    #ΔH,LR_tmp,P_tmp = make_trial(ct,P_Node,color)
+    #type = sample([0,1,2,3,4],Weights(exp.(-beta.*insert!(ΔH,1,0))))
+    t,ΔH,LR_tmp,P_tmp = make_trial(ct,P_Node,color)
+    #println(ΔH)
+    if rand()>min(1,exp(-β*ΔH))
+        return 0
+    end
+    @switch t begin
         @case 1
         A,B,C = get_left(ct,L),get_right(ct,L),get_right(ct,P_Node)
-        P_tmp[1].father = P_Node.father
-        LR_tmp[1].father, A.father = P_tmp[1].id, P_tmp[1].id
-        C.father,B.father = LR_tmp[1].id,LR_tmp[1].id
+        P_tmp.father = P_Node.father
+        LR_tmp.father, A.father = P_tmp.id, P_tmp.id
+        C.father,B.father = LR_tmp.id,LR_tmp.id
         delete!(ct.nodes,L.id)
         delete!(ct.nodes,P_Node.id)
-        ct.nodes[P_tmp[1].id] = P_tmp[1]
-        ct.nodes[LR_tmp[1].id] = LR_tmp[1]
+        ct.nodes[P_tmp.id] = P_tmp
+        ct.nodes[LR_tmp.id] = LR_tmp
         return 1
 
         @case 2
         A,B,C = get_left(ct,L),get_right(ct,L),get_right(ct,P_Node)
-        P_tmp[2].father = P_Node.father
-        LR_tmp[2].father, B.father = P_tmp[2].id, P_tmp[2].id
-        A.father,C.father = LR_tmp[2].id,LR_tmp[2].id
+        P_tmp.father = P_Node.father
+        LR_tmp.father, B.father = P_tmp.id, P_tmp.id
+        A.father,C.father = LR_tmp.id,LR_tmp.id
         delete!(ct.nodes,L.id)
         delete!(ct.nodes,P_Node.id)
-        ct.nodes[P_tmp[2].id] = P_tmp[2]
-        ct.nodes[LR_tmp[2].id] = LR_tmp[2]
+        ct.nodes[P_tmp.id] = P_tmp
+        ct.nodes[LR_tmp.id] = LR_tmp
         return 1
 
         @case 3
         A,B,C = get_left(ct,P_Node),get_left(ct,R),get_right(ct,R)
-        P_tmp[3].father = P_Node.father
-        LR_tmp[3].father, B.father = P_tmp[3].id, P_tmp[3].id
-        A.father,C.father = LR_tmp[3].id,LR_tmp[3].id
+        P_tmp.father = P_Node.father
+        LR_tmp.father, B.father = P_tmp.id, P_tmp.id
+        A.father,C.father = LR_tmp.id,LR_tmp.id
         delete!(ct.nodes,R.id)
         delete!(ct.nodes,P_Node.id)
-        ct.nodes[P_tmp[3].id] = P_tmp[3]
-        ct.nodes[LR_tmp[3].id] = LR_tmp[3]
+        ct.nodes[P_tmp.id] = P_tmp
+        ct.nodes[LR_tmp.id] = LR_tmp
         return 1
 
         @case 4
         A,B,C = get_left(ct,P_Node),get_left(ct,R),get_right(ct,R)
-        P_tmp[4].father = P_Node.father
-        LR_tmp[4].father, C.father = P_tmp[4].id, P_tmp[4].id
-        B.father,A.father = LR_tmp[4].id,LR_tmp[4].id
+        P_tmp.father = P_Node.father
+        LR_tmp.father, C.father = P_tmp.id, P_tmp.id
+        B.father,A.father = LR_tmp.id,LR_tmp.id
         delete!(ct.nodes,R.id)
         delete!(ct.nodes,P_Node.id)
-        ct.nodes[P_tmp[4].id] = P_tmp[4]
-        ct.nodes[LR_tmp[4].id] = LR_tmp[4]
+        ct.nodes[P_tmp.id] = P_tmp
+        ct.nodes[LR_tmp.id] = LR_tmp
         return 1
 
         @case 0

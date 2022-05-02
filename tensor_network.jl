@@ -7,65 +7,53 @@ include("contraction_tree.jl")
 mutable struct Graph{T,S}
     n::T # number of variables
     edges::Array{Array{T,1},1} # edge [i,j], i<j
-    # neis::Array{Set{T},1} # neighbors, list of list
-    neis::Dict
+    neis::Dict # i=>neis[i]
     edge_log2dim::Array{S,1} # weight for each edge
-    # node_log2dim::Array{S,1} # log dimension of each
     node_log2dim::Dict{T,S} # log dimension of each 
 end
 
 mutable struct OpenGraph{T,S}
     n::T # number of variables
     edges::Array{Array{T,1},1}
-    neis::Array{Set{T},1}
+    neis::Dict
     edge_log2dim::Array{S,1}
-    node_log2dim::Array{S,1}
-    node_outlog2dim::Array{S,1}
+    node_log2dim::Dict{T,S}
+    node_outlog2dim::Dict{T,S}
 end
 
 
 
-function get_edge_index(t::Union{Graph,OpenGraph},edge)
-    for i = eachindex(t.edges)
-        if t.edges[i] == edge
-            return i
-        end
-    end
-    error("edge ",edge," does NOT in the Graph!")
-end
-
-function get_edge_log2dim(t::Union{Graph,OpenGraph}, edge)
-    for i = eachindex(t.edges)
-        if t.edges[i] == edge
-            return t.edge_log2dim[i]
-        end
-    end
-    error("edge ",edge," does NOT in the Graph!")
+@inline function get_edge_log2dim(t::Union{Graph,OpenGraph}, edge)
+    #for i = eachindex(t.edges)
+    #    if t.edges[i] == edge
+    #        return t.edge_log2dim[i]
+    #    end
+    #end
+    #error("edge ",edge," does NOT in the Graph!")
     #return 0
+    return t.edge_log2dim[indexin([edge],t.edges)[1]]
 end
 
-"""
-function add_edge!(t::Graph,edge::Array{Int64,1},log2weight)
-    sort!(edge)
-    i,j = edge
-    if edge in t.edges
-        t.edge_log2dim[get_edge_index(t,edge)] += log2weight
+@inline function edge_node_log2dim(t::OpenGraph,a)
+    """
+
+    Only for OpenGraph. 
+    Output: log2dim + outlog2dim.
+    """
+    if a in keys(node_outlog2dim)
+        return t.node_log2dim[a] + t.node_outlog2dim[a]
     else
-        push!(t.edges,edge)
-        push!(t.edge_log2dim, log2weight)
-        push!(t.neis[i],j)
-        push!(t.neis[j],i)
+        return t.node_log2dim[a]
     end
-    t.node_log2dim[edge] .+= log2weight
-    return 0
 end
-"""
+
+
 
 function add_edge!(t::Union{Graph,OpenGraph},edge::Array{Int64,1},log2weight::Float64)
     sort!(edge)
     i,j = edge
     if edge in t.edges
-        t.edge_log2dim[get_edge_index(t,edge)] += log2weight
+        t.edge_log2dim[indexin([edge],t.edges)[1]] += log2weight
     else
         push!(t.edges,edge)
         push!(t.edge_log2dim,log2weight)
@@ -79,7 +67,7 @@ end
 
 
 function rm_edge!(t::Union{Graph,OpenGraph},edge::Array{Int64,1})
-    m = get_edge_index(t,edge)
+    m = indexin([edge],t.edges)[1]
     i,j = edge
     log2dim = t.edge_log2dim[m]
     deleteat!(t.edges,m)
@@ -127,7 +115,7 @@ function contract_edge!(t::Graph{Int64,Float64},edge::Array{Int64,1})
     return i,j,max(sc,t.node_log2dim[i]),tc
 end
 
-function contract_edge!(t::OpenGraph,edge::Array{Int64,1})
+function contract_edge!(t::OpenGraph{Int64,Float64 },edge::Array{Int64,1})
     i,j = edge
     sc = max(t.node_log2dim[i]+t.node_outlog2dim[i],t.node_log2dim[j]+t.node_outlog2dim[j])
     tc = t.node_log2dim[i]+t.node_outlog2dim[i]+t.node_log2dim[j]+t.node_outlog2dim[j]
@@ -199,19 +187,27 @@ function greedy_local(t::Graph)
 end
 
 
-function get_subgraph(g::Graph,V)
+function get_subgraph(g::Graph,V)::OpenGraph
     nodes = sort(collect(V))
     n = length(V)
     edges = Array{Vector{Int64},1}([])
+    node_outlog2dim = Dict{Int64,Float64}( [(k,0.0) for k in V] )
     for e in g.edges
         i,j=e
-        i in V && j in V && push!(edges,e)
+        if i ∈ V && j ∈ V 
+            push!(edges,e)
+        elseif i ∈ V && j ∉ V
+            node_outlog2dim[i] += get_edge_log2dim(g,e)
+        elseif j ∈ V && i ∉ V
+            node_outlog2dim[j] += get_edge_log2dim(g,e)
+        end
     end
     #neis = Array{Set{Int64},1}([intersect(V,g.neis[i]) for i in nodes])
     neis = Dict( [(k,intersect(g.neis[k],V)) for k in V])
     edge_log2dim = g.edge_log2dim[indexin(edges,g.edges)]
-    node_log2dim = Dict( [(k,g.node_log2dim[k]) for k in V])
-    return Graph(n,edges,neis,edge_log2dim,node_log2dim),nodes
+    node_log2dim = Dict( [(k,g.node_log2dim[k]) for k in V] )
+    #return Graph(n,edges,neis,edge_log2dim,node_log2dim),nodes
+    return OpenGraph(n,edges,neis,edge_log2dim,node_log2dim,node_outlog2dim)
 end
 
 function quickbb(g::Graph,V)
